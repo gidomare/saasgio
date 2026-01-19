@@ -1,0 +1,65 @@
+services:
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            args:
+                uid: ${UID:-1000}
+                user: ${USER:-gidomare}
+        image: wms-app
+        container_name: wms-app
+        restart: unless-stopped
+        working_dir: /var/www/html
+        volumes:
+            - ./:/var/www/html
+        networks:
+            - wms-network
+        depends_on:
+            - database
+            - redis
+
+    web:
+        image: nginx:alpine
+        container_name: wms-nginx
+        restart: unless-stopped
+        ports:
+            - "8000:80"
+        volumes:
+            - ./:/var/www/html
+            - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf
+        networks:
+            - wms-network
+        depends_on:
+            - app
+
+    database:
+        image: mariadb:10.11
+        container_name: wms-db
+        restart: unless-stopped
+        environment:
+            MYSQL_DATABASE: ${DB_DATABASE:-wms_db}
+            MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+            MYSQL_PASSWORD: ${DB_PASSWORD:-root}
+            MYSQL_USER: ${DB_USERNAME:-wms_user}
+            MYSQL_ALLOW_EMPTY_PASSWORD: 1
+        volumes:
+            - db-data:/var/lib/mysql
+        networks:
+            - wms-network
+
+    redis:
+        image: redis:alpine
+        container_name: wms-redis
+        restart: unless-stopped
+        volumes:
+            - redis-data:/data
+        networks:
+            - wms-network
+
+networks:
+    wms-network:
+        driver: bridge
+
+volumes:
+    db-data:
+    redis-data:
