@@ -70,147 +70,335 @@ class WisphubService
         $apiKey = $this->integration->settings['api_key'] ?? '';
 
         if (empty($url) || empty($apiKey)) {
-            throw new Exception("Configuración incompleta.");
+            throw new Exception("Configuración incompleta. Verifica URL y API Key en Wisphub Settings.");
         }
 
-        $stats = ['imported_customers' => 0, 'updated_customers' => 0, 'errors' => 0];
+        $stats = [
+            'synced_services' => 0,
+            'deleted_services' => 0,
+            'deleted_customers' => 0,
+            'errors' => 0
+        ];
 
         try {
-            // Los endpoints de catálogos no están disponibles en Wisphub
-            // La información de planes y routers viene dentro de cada cliente
-            // $this->syncPlans($url, $apiKey);
-            // $this->syncRouters($url, $apiKey);
+            // Paso 1: Sincronizar catálogos (Planes y Routers)
+            $this->syncPlans($url, $apiKey);
+            $this->syncRouters($url, $apiKey);
 
-            // Paso 1: Obtener Clientes
-            // Limpiamos trailing slash
-            $baseUrl = rtrim($url, '/');
+            // Paso 2: Sincronizar clientes y servicios
+            $syncedServiceIds = [];
+            $syncedCustomerIds = [];
             
-            // Si el usuario ya puso la ruta completa (ej .../api/clientes), la usamos.
-            if (str_contains($baseUrl, '/clientes')) {
-                $endpoint = $baseUrl . '/'; 
-            } else {
-                // Si puso la raiz, agregamos el path estándar
-                // Detectamos si falta /api
-                if (!str_contains($baseUrl, '/api')) {
-                     $baseUrl .= '/api';
-                }
-                $endpoint = $baseUrl . '/clientes/';
-            }
-
-            // Log de depuración (puedes verlo en storage/logs/laravel.log)
-            // \Illuminate\Support\Facades\Log::info("Wisphub Sync Endpoint: " . $endpoint);
-
+            $endpoint = $this->buildClientEndpoint($url);
             $nextUrl = $endpoint;
             
             do {
-                // Log::info("Consultando pagina: " . $nextUrl);
                 $response = Http::withHeaders(['Authorization' => 'Api-Key ' . $apiKey])
+                    ->timeout(30)
                     ->get($nextUrl);
 
                 if ($response->failed()) {
-                    throw new Exception("Error HTTP " . $response->status() . " en " . $nextUrl);
+                    throw new Exception("Error HTTP {$response->status()} al consultar clientes en: {$nextUrl}");
                 }
 
                 $data = $response->json();
                 $clients = $data['results'] ?? [];
                 
-                // Determinar siguiente página
-                // Wisphub suele devolver 'next': 'http://...' lo que causa 403 si el server fuerza HTTPS
+                foreach ($clients as $clientData) {
+                    try {
+                        $result = $this->importClient($clientData);
+                        $syncedServiceIds[] = $result['service_id'];
+                        $syncedCustomerIds[] = $result['customer_id'];
+                        $stats['synced_services']++;
+                    } catch (\Throwable $e) {
+                        $stats['errors']++;
+                        \Illuminate\Support\Facades\Log::error("Error al importar cliente desde Wisphub", [
+                            'wisphub_id' => $clientData['id_servicio'] ?? $clientData['id'] ?? 'unknown',
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                    }
+                }
+                
+                $nextUrl = $data['next'] ?? null;
+                if ($nextUrl) {
+                    $nextUrl = str_replace('http://', 'https://', $nextUrl);
+                }
+                
+                // Pausa para evitar rate limiting
+                usleep(500000);
+
+            } while ($nextUrl);
+
+            // Paso 3: Calcular saldos reales desde facturas pendientes
+            // Wisphub NO usa el campo 'saldo' - calcula deuda sumando facturas pendientes
+            $this->syncBalancesFromInvoices($url, $apiKey);
+
+            // Paso 4: Eliminar servicios que ya no existen en Wisphub
+            if (count($syncedServiceIds) > 0) {
+                $deletedServices = \App\Models\Service::whereNotNull('wisphub_servicio_id')
+                    ->whereNotIn('id', $syncedServiceIds)
+                    ->delete();
+                $stats['deleted_services'] = $deletedServices;
+            }
+
+            // Paso 5: Eliminar clientes que ya no tienen servicios
+            $deletedCustomers = \App\Models\Customer::whereDoesntHave('services')->delete();
+            $stats['deleted_customers'] = $deletedCustomers;
+
+            return [
+                'success' => true,
+                'message' => sprintf(
+                    "Sincronización completada. Servicios: %d sincronizados, %d eliminados. Clientes huérfanos eliminados: %d. Errores: %d",
+                    $stats['synced_services'],
+                    $stats['deleted_services'],
+                    $stats['deleted_customers'],
+                    $stats['errors']
+                ),
+                'stats' => $stats
+            ];
+
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("Error crítico en sincronización Wisphub", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            
+            return [
+                'success' => false,
+                'message' => "Error crítico: " . $e->getMessage(),
+                'stats' => $stats
+            ];
+        }
+    }
+
+    /**
+     * Construye el endpoint correcto para consultar clientes
+     */
+    protected function buildClientEndpoint(string $url): string
+    {
+        $baseUrl = rtrim($url, '/');
+        
+        if (str_contains($baseUrl, '/clientes')) {
+            return $baseUrl . '/';
+        }
+        
+        if (!str_contains($baseUrl, '/api')) {
+            $baseUrl .= '/api';
+        }
+        
+        return $baseUrl . '/clientes/';
+    }
+
+    /**
+     * Calcula los saldos reales consultando facturas pendientes
+     * Wisphub NO usa el campo 'saldo' del cliente - suma facturas pendientes
+     */
+    protected function syncBalancesFromInvoices(string $baseUrl, string $apiKey): void
+    {
+        try {
+            $host = parse_url($baseUrl, PHP_URL_HOST);
+            $scheme = parse_url($baseUrl, PHP_URL_SCHEME) ?: 'https';
+            $endpoint = "{$scheme}://{$host}/api/facturas/?limit=300";
+
+            $balances = [];
+            $nextUrl = $endpoint;
+            $invoiceCount = 0;
+
+            // Paso 1: Recopilar todas las facturas pendientes
+            do {
+                $response = Http::withHeaders(['Authorization' => 'Api-Key ' . $apiKey])
+                    ->timeout(30)
+                    ->get($nextUrl);
+
+                if ($response->failed()) {
+                    \Illuminate\Support\Facades\Log::warning("syncBalancesFromInvoices: Error al consultar facturas", [
+                        'url' => $nextUrl,
+                        'status' => $response->status()
+                    ]);
+                    break;
+                }
+
+                $data = $response->json();
+                $invoices = $data['results'] ?? [];
+
+                foreach ($invoices as $invoice) {
+                    $invoiceCount++;
+                    
+                    // Solo procesar facturas pendientes
+                    if (($invoice['estado'] ?? '') !== 'Pendiente de Pago') {
+                        continue;
+                    }
+
+                    $invoiceTotal = floatval($invoice['total'] ?? 0);
+                    if ($invoiceTotal <= 0) {
+                        continue;
+                    }
+
+                    // Extraer servicios únicos de esta factura
+                    // IMPORTANTE: Una factura puede tener múltiples artículos para el mismo servicio
+                    // Solo debemos sumar el total de la factura UNA VEZ por servicio
+                    $servicesInInvoice = [];
+                    foreach ($invoice['articulos'] ?? [] as $articulo) {
+                        $servicioId = $articulo['servicio']['id_servicio'] ?? null;
+                        if ($servicioId && !in_array($servicioId, $servicesInInvoice)) {
+                            $servicesInInvoice[] = $servicioId;
+                        }
+                    }
+
+                    // Sumar el total de la factura a cada servicio único
+                    foreach ($servicesInInvoice as $servicioId) {
+                        $balances[$servicioId] = ($balances[$servicioId] ?? 0) + $invoiceTotal;
+                    }
+                }
+
                 $nextUrl = $data['next'] ?? null;
                 if ($nextUrl) {
                     $nextUrl = str_replace('http://', 'https://', $nextUrl);
                 }
 
-                foreach ($clients as $clientData) {
-                    try {
-                        $this->importClient($clientData);
-                        $stats['imported_customers']++;
-                    } catch (\Throwable $e) {
-                        $stats['errors']++;
-                        \Illuminate\Support\Facades\Log::error("Error importClient: " . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
-                    }
-                }
-                
-                // Pequeña pausa para evitar bloqueo por Flood/RateLimit (403/429)
-                usleep(500000); 
+                usleep(300000); // Pausa para evitar rate limiting
 
             } while ($nextUrl);
 
-            return [
-                'success' => true,
-                'message' => "Sincronización finalizada. Importados/Actualizados: {$stats['imported_customers']}. Errores: {$stats['errors']}."
-            ];
+            // Paso 2: Actualizar balances en la base de datos
+            $updatedCount = 0;
+            
+            // Actualizar servicios con deuda
+            foreach ($balances as $wisphubId => $totalBalance) {
+                $updated = \App\Models\Service::where('wisphub_servicio_id', $wisphubId)
+                    ->update(['balance' => $totalBalance]);
+                if ($updated > 0) {
+                    $updatedCount++;
+                }
+            }
+
+            // Poner en 0 los servicios sin deuda pendiente
+            \App\Models\Service::whereNotNull('wisphub_servicio_id')
+                ->whereNotIn('wisphub_servicio_id', array_keys($balances))
+                ->update(['balance' => 0]);
+
+            \Illuminate\Support\Facades\Log::info("syncBalancesFromInvoices completado", [
+                'invoices_processed' => $invoiceCount,
+                'services_with_debt' => count($balances),
+                'services_updated' => $updatedCount
+            ]);
 
         } catch (\Throwable $e) {
-            return ['success' => false, 'message' => "Fallo crítico: " . $e->getMessage()];
+            \Illuminate\Support\Facades\Log::error("Error en syncBalancesFromInvoices", [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     }
     
     protected function syncPlans($baseUrl, $apiKey)
     {
-        // Construcción segura de URL
-        // Objetivo: https://api.wisphub.net/api/planes-internet/
-        $schemeHost = parse_url($baseUrl, PHP_URL_SCHEME) . '://' . parse_url($baseUrl, PHP_URL_HOST);
-        $endpoint = $schemeHost . '/api/planes-internet/';
+        // Limpiar URL base para obtener solo el host
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+        $scheme = parse_url($baseUrl, PHP_URL_SCHEME) ?: 'https';
+        $endpoint = "{$scheme}://{$host}/api/planes-internet/";
 
-        $response = Http::withHeaders(['Authorization' => 'Api-Key ' . $apiKey])->get($endpoint);
-        if ($response->successful()) {
-            foreach ($response->json()['results'] ?? [] as $plan) {
-                if (!is_array($plan)) continue;
-                try {
-                     \App\Models\Plan::updateOrCreate(
+        try {
+            $response = Http::withHeaders(['Authorization' => 'Api-Key ' . $apiKey])->get($endpoint);
+            if ($response->successful()) {
+                foreach ($response->json()['results'] ?? [] as $plan) {
+                    if (!is_array($plan)) continue;
+                    \App\Models\Plan::updateOrCreate(
                         ['wisphub_id' => $plan['id']],
                         [
-                            'name' => $plan['nombre'],
-                            // Wisphub envía velocidades en Mbps, convertir a Kbps (1 Mbps = 1000 Kbps)
-                            'download_speed_kbps' => intval(($plan['bajada'] ?? 0) * 1000),
-                            'upload_speed_kbps' => intval(($plan['subida'] ?? 0) * 1000),
+                            'name' => $plan['nombre'] ?? 'Plan',
+                            'download_speed_kbps' => intval(($plan['bajada'] ?? 0) * 1024),
+                            'upload_speed_kbps' => intval(($plan['subida'] ?? 0) * 1024),
                             'price' => floatval($plan['precio'] ?? 0),
                         ]
                     );
-                } catch (\Throwable $e) {
-                     \Illuminate\Support\Facades\Log::error("Error syncPlan: " . $e->getMessage(), ['data' => $plan]);
                 }
             }
-        } else {
-            // Log::warning("Fallo syncPlans: " . $response->status());
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("Error syncPlans: " . $e->getMessage());
         }
     }
 
     protected function syncRouters($baseUrl, $apiKey)
     {
-         // Objetivo: https://api.wisphub.net/api/routers/
-        $schemeHost = parse_url($baseUrl, PHP_URL_SCHEME) . '://' . parse_url($baseUrl, PHP_URL_HOST);
-        $endpoint = $schemeHost . '/api/routers/';
+        $host = parse_url($baseUrl, PHP_URL_HOST);
+        $scheme = parse_url($baseUrl, PHP_URL_SCHEME) ?: 'https';
+        $endpoint = "{$scheme}://{$host}/api/routers/";
 
-        $response = Http::withHeaders(['Authorization' => 'Api-Key ' . $apiKey])->get($endpoint);
-        if ($response->successful()) {
-            foreach ($response->json()['results'] ?? [] as $router) {
-                if (!is_array($router)) continue;
-                try {
-                     \App\Models\Router::updateOrCreate(
-                        ['wisphub_id' => $router['id']],
+        try {
+            $response = Http::withHeaders(['Authorization' => 'Api-Key ' . $apiKey])->get($endpoint);
+            
+            if ($response->successful()) {
+                $results = $response->json()['results'] ?? [];
+                
+                foreach ($results as $routerData) {
+                    if (!is_array($routerData)) continue;
+                    
+                    // Mapeo de Método de Corte (Wisphub -> Local)
+                    $metodoCorteWs = (string)($routerData['metodo_corte'] ?? '1');
+                    $serviceCutType = match($metodoCorteWs) {
+                        '4' => 'ppp_secret',
+                        '2' => 'address_list_moroso',
+                        '3' => 'hotspot_user',
+                        default => 'simple_queue', // '1' o otros
+                    };
+
+                    // Mapeo de Versión ROS
+                    $versionRos = (str_contains((string)($routerData['version_ros'] ?? ''), '7')) 
+                        ? '7_or_higher' : '6_or_lower';
+
+                    if (empty($routerData['id'])) {
+                        \Illuminate\Support\Facades\Log::warning("syncRouters: Router sin ID ignorado", $routerData);
+                        continue;
+                    }
+
+                    \App\Models\Router::updateOrCreate(
+                        ['wisphub_id' => $routerData['id']],
                         [
-                            'name' => $router['nombre'],
-                            'ip_address' => $router['ip'] ?? $router['ip_address'] ?? '0.0.0.0',
-                            'type' => 'mikrotik', 
-                            'api_port' => intval($router['puerto_api'] ?? $router['api_port'] ?? 8728),
+                            'wisphub_id' => $routerData['id'], // Aseguramos que se guarde el ID
+                            'name' => $routerData['nombre'] ?? 'Router Wisphub',
+                            'ip_address' => $routerData['ip'] ?? '0.0.0.0',
+                            'api_user' => $routerData['user_api'] ?? 'admin',
+                            'api_password' => $routerData['pass_api'] ?? null,
+                            'api_port' => intval($routerData['puerto_api'] ?? 8728),
+                            'www_port' => intval($routerData['puerto_www'] ?? 80),
+                            'lan_interface' => $routerData['interfaz_lan'] ?? null,
+                            'router_os_version' => $versionRos,
+                            'service_cut_type' => $serviceCutType,
+                            
+                            // Switches de control basados en el método
+                            'control_pppoe' => ($serviceCutType === 'ppp_secret'),
+                            'control_simple_queue' => ($serviceCutType === 'simple_queue' || $serviceCutType === 'address_list_moroso'),
+                            'control_hotspot' => ($serviceCutType === 'hotspot_user'),
+                            'control_pcq_address_list' => ($serviceCutType === 'address_list_moroso'),
+                            
+                            // Features generales (asumimos true si están habilitados en WS)
+                            'enable_api' => true,
+                            'ip_bindings' => ($serviceCutType === 'address_list_moroso' || $serviceCutType === 'hotspot_user'),
+                            'dhcp_leases' => ($serviceCutType !== 'ppp_secret'),
+                            
+                            'coordinates' => $routerData['gps'] ?? null,
+                            'comments' => 'Sincronizado desde Wisphub',
                         ]
                     );
-                } catch (\Throwable $e) {
-                    \Illuminate\Support\Facades\Log::error("Error syncRouter: " . $e->getMessage(), ['data' => $router]);
                 }
             }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error("Error syncRouters: " . $e->getMessage());
         }
     }
 
-    protected function importClient(array $data)
+    /**
+     * Importa un cliente desde Wisphub al CRM local
+     * Retorna los IDs del servicio y cliente creados/actualizados
+     */
+    protected function importClient(array $data): array
     {
-        // ... (código previo de Customer) ...
         $wisphubId = $data['id_servicio'] ?? $data['id'];
         $name = $data['nombre'] ?? 'Cliente Sin Nombre';
         
-        // Concatenar dirección completa: Dirección + Localidad + Ciudad
+        // Concatenar dirección completa
         $addressParts = array_filter([
             $data['direccion'] ?? null,
             $data['localidad'] ?? null,
@@ -218,6 +406,7 @@ class WisphubService
         ]);
         $fullAddress = implode("\n", $addressParts);
         
+        // Crear o actualizar cliente
         $customer = \App\Models\Customer::updateOrCreate(
             ['wisphub_id' => $wisphubId],
             [
@@ -226,95 +415,32 @@ class WisphubService
                 'phone' => $data['telefono'] ?? null,
                 'address' => $fullAddress ?: null,
                 'coordinates' => $data['coordenadas'] ?? null,
-                'installation_date' => (function() use ($data) {
-                    $rawDate = $data['fecha_instalacion'] ?? '';
-                    if (empty($rawDate) || $rawDate === 'None') return null;
-                    try {
-                        // Formato Wisphub: 15/01/2026 14:49:00
-                        return \Carbon\Carbon::createFromFormat('d/m/Y H:i:s', $rawDate)->format('Y-m-d');
-                    } catch (\Throwable $e) {
-                         // Fallback por si el formato cambia
-                        try {
-                            return \Carbon\Carbon::parse($rawDate)->format('Y-m-d');
-                        } catch (\Throwable $e2) {
-                            return null;
-                        }
-                    }
-                })(),
+                'installation_date' => $this->parseInstallationDate($data['fecha_instalacion'] ?? null),
             ]
         );
 
-        // 1. Resolver Plan
-        $planId = null;
-        // Wisphub envía plan_internet como objeto {id, nombre}, no como string
-        $planData = $data['plan_internet'] ?? null;
+        // Resolver Plan
+        $planId = $this->resolvePlan($data);
         
-        if (is_array($planData) && isset($planData['id'])) {
-            // Buscar o crear plan usando wisphub_id
-            $plan = \App\Models\Plan::updateOrCreate(
-                ['wisphub_id' => $planData['id']],
-                [
-                    'name' => $planData['nombre'] ?? 'Plan Desconocido',
-                    'download_speed_kbps' => 0,
-                    'upload_speed_kbps' => 0,
-                    'price' => floatval($data['precio_plan'] ?? 0),
-                ]
-            );
-            $planId = $plan->id;
-        } else {
-            // Fallback si no viene plan_internet
-            $planName = is_array($planData) ? ($planData['nombre'] ?? 'Plan Desconocido') : ($planData ?? 'Plan Desconocido');
-            $plan = \App\Models\Plan::updateOrCreate(
-                ['name' => $planName],
-                [
-                    'download_speed_kbps' => 0,
-                    'upload_speed_kbps' => 0,
-                    'price' => floatval($data['precio_plan'] ?? 0),
-                ]
-            );
-            $planId = $plan->id;
-        }
-        
-        // 2. Resolver Router
-        $routerId = null;
-        // Wisphub envía router como objeto {id, nombre, ip}, no como string
-        $routerData = $data['router'] ?? null;
-        
-        if (is_array($routerData) && isset($routerData['id'])) {
-            // Buscar o crear router usando wisphub_id
-            $router = \App\Models\Router::updateOrCreate(
-                ['wisphub_id' => $routerData['id']],
-                [
-                    'name' => $routerData['nombre'] ?? 'Router Desconocido',
-                    'ip_address' => $routerData['ip'] ?? '0.0.0.0',
-                    'type' => 'mikrotik',
-                    'api_port' => 8728,
-                ]
-            );
-            $routerId = $router->id;
-        } else {
-            // Fallback si no viene router
-            $routerName = is_array($routerData) ? ($routerData['nombre'] ?? 'Router Desconocido') : ($routerData ?? 'Router Desconocido');
-            $router = \App\Models\Router::updateOrCreate(
-                ['name' => $routerName],
-                [
-                    'ip_address' => '0.0.0.0',
-                    'type' => 'mikrotik'
-                ]
-            );
-            $routerId = $router->id;
-        }
+        // Resolver Router
+        $routerId = $this->resolveRouter($data);
 
-        // Mapeo de Estado
+        // Mapeo directo de estado desde Wisphub
         $statusMap = [
-            '1' => 'active', 'activo' => 'active',
-            '2' => 'suspended', 'suspendido' => 'suspended', 'corte' => 'suspended',
-            'retirado' => 'cancelled', 'cancelado' => 'cancelled'
+            '1' => 'active', 
+            'activo' => 'active', 
+            'gratis' => 'active',
+            '2' => 'suspended', 
+            'suspendido' => 'suspended', 
+            'corte' => 'suspended',
+            'retirado' => 'cancelled', 
+            'cancelado' => 'cancelled'
         ];
         $rawStatus = strtolower((string)($data['estado'] ?? ''));
         $status = $statusMap[$rawStatus] ?? 'active';
 
-        $customer->services()->updateOrCreate(
+        // Crear o actualizar servicio con mapeo DIRECTO desde Wisphub
+        $service = $customer->services()->updateOrCreate(
             ['wisphub_servicio_id' => $data['id_servicio'] ?? $wisphubId],
             [
                 'router_id' => $routerId,
@@ -324,7 +450,105 @@ class WisphubService
                 'pppoe_user' => $data['user_pppoe'] ?? null,
                 'pppoe_password' => $data['pass_pppoe'] ?? null,
                 'status' => $status,
+                
+                // Mapeo DIRECTO de campos financieros - sin cálculos
+                'balance' => floatval($data['saldo'] ?? 0),
+                'cut_off_date' => $data['fecha_corte'] ?? null,
+                'last_payment_date' => $data['ultima_fecha_pago'] ?? null,
+                'billing_day' => isset($data['dia_pago']) ? intval($data['dia_pago']) : null,
+                'billing_notes' => $data['comentarios'] ?? null,
             ]
         );
+
+        return [
+            'service_id' => $service->id,
+            'customer_id' => $customer->id
+        ];
+    }
+
+    /**
+     * Parsea la fecha de instalación desde el formato de Wisphub
+     */
+    protected function parseInstallationDate(?string $rawDate): ?string
+    {
+        if (empty($rawDate) || $rawDate === 'None') {
+            return null;
+        }
+
+        try {
+            // Formato Wisphub: 15/01/2026 14:49:00
+            return \Carbon\Carbon::createFromFormat('d/m/Y H:i:s', $rawDate)->format('Y-m-d');
+        } catch (\Throwable $e) {
+            // Fallback
+            try {
+                return \Carbon\Carbon::parse($rawDate)->format('Y-m-d');
+            } catch (\Throwable $e2) {
+                return null;
+            }
+        }
+    }
+
+    /**
+     * Resuelve el plan desde los datos de Wisphub
+     */
+    protected function resolvePlan(array $data): ?int
+    {
+        $planData = $data['plan_internet'] ?? null;
+        
+        if (is_array($planData) && isset($planData['id'])) {
+            $plan = \App\Models\Plan::updateOrCreate(
+                ['wisphub_id' => $planData['id']],
+                [
+                    'name' => $planData['nombre'] ?? 'Plan Desconocido',
+                    'download_speed_kbps' => 0,
+                    'upload_speed_kbps' => 0,
+                    'price' => floatval($data['precio_plan'] ?? 0),
+                ]
+            );
+            return $plan->id;
+        }
+        
+        // Fallback
+        $planName = is_array($planData) ? ($planData['nombre'] ?? 'Plan Desconocido') : ($planData ?? 'Plan Desconocido');
+        $plan = \App\Models\Plan::updateOrCreate(
+            ['name' => $planName],
+            [
+                'download_speed_kbps' => 0,
+                'upload_speed_kbps' => 0,
+                'price' => floatval($data['precio_plan'] ?? 0),
+            ]
+        );
+        return $plan->id;
+    }
+
+    /**
+     * Resuelve el router desde los datos de Wisphub
+     */
+    protected function resolveRouter(array $data): ?int
+    {
+        $routerData = $data['router'] ?? null;
+        
+        if (is_array($routerData) && isset($routerData['id'])) {
+            $router = \App\Models\Router::where('wisphub_id', $routerData['id'])->first();
+            
+            if (!$router) {
+                $router = \App\Models\Router::create([
+                    'wisphub_id' => $routerData['id'],
+                    'name' => $routerData['nombre'] ?? 'Router Nuevo',
+                    'ip_address' => $routerData['ip'] ?? '0.0.0.0',
+                    'type' => 'mikrotik',
+                    'api_port' => 8728,
+                ]);
+            }
+            return $router->id;
+        }
+        
+        // Fallback
+        $routerName = is_array($routerData) ? ($routerData['nombre'] ?? 'Router Desconocido') : ($routerData ?? 'Router Desconocido');
+        $router = \App\Models\Router::firstOrCreate(
+            ['name' => $routerName],
+            ['ip_address' => '0.0.0.0', 'type' => 'mikrotik']
+        );
+        return $router->id;
     }
 }

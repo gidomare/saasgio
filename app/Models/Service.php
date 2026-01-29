@@ -16,6 +16,11 @@ class Service extends Model
         'pppoe_user',
         'pppoe_password',
         'status',
+        'balance',
+        'cut_off_date',
+        'last_payment_date',
+        'billing_day',
+        'billing_notes',
     ];
 
     public function customer()

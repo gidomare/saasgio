@@ -10,8 +10,7 @@ services:
         container_name: wms-app
         restart: unless-stopped
         working_dir: /var/www/html
-        networks:
-            - wms-network
+        network_mode: service:vpn
         volumes:
             - ./:/var/www/html
             - vpn-config:/config
@@ -19,6 +18,7 @@ services:
         depends_on:
             - database
             - redis
+            - vpn
 
     vpn:
         image: lscr.io/linuxserver/wireguard:latest

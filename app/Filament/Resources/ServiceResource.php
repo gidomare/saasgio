@@ -82,6 +82,28 @@ class ServiceResource extends Resource
                     ])
                     ->required()
                     ->default('active'),
+                
+                Forms\Components\Section::make('Información de Facturación')
+                    ->schema([
+                        Forms\Components\TextInput::make('balance')
+                            ->label('Saldo Actual')
+                            ->numeric()
+                            ->prefix('$')
+                            ->readOnly(),
+                        Forms\Components\TextInput::make('cut_off_date')
+                            ->label('Fecha de Corte')
+                            ->readOnly(),
+                        Forms\Components\TextInput::make('last_payment_date')
+                            ->label('Última Fecha de Pago')
+                            ->readOnly(),
+                        Forms\Components\TextInput::make('billing_day')
+                            ->label('Día de Pago')
+                            ->numeric()
+                            ->readOnly(),
+                        Forms\Components\Textarea::make('billing_notes')
+                            ->label('Notas de Facturación')
+                            ->columnSpanFull(),
+                    ])->columns(2),
             ]);
     }
 
@@ -109,6 +131,16 @@ class ServiceResource extends Resource
                         'suspended' => 'warning',
                         'cancelled' => 'danger',
                     }),
+                Tables\Columns\TextColumn::make('balance')
+                    ->label('Saldo')
+                    ->money('USD')
+                    ->sortable()
+                    ->color(fn ($state) => $state > 0 ? 'danger' : 'success'),
+                Tables\Columns\TextColumn::make('cut_off_date')
+                    ->label('F. Corte'),
+                Tables\Columns\TextColumn::make('billing_day')
+                    ->label('Día Pago')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('created_at')
                     ->label('Alta')
                     ->dateTime()
