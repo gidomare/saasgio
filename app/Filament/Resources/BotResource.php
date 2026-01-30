@@ -228,7 +228,9 @@ class BotResource extends Resource
                 //
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()
+                    ->label('')
+                    ->tooltip('Editar'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

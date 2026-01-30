@@ -56,6 +56,7 @@ services:
         image: mariadb:10.11
         container_name: wms-db
         restart: unless-stopped
+        command: --skip-ssl
         environment:
             MYSQL_DATABASE: ${DB_DATABASE:-wms_db}
             MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
@@ -75,6 +76,20 @@ services:
             - redis-data:/data
         networks:
             - wms-network
+
+    snmp:
+        build:
+            context: ./docker/snmp
+            dockerfile: Dockerfile
+        image: wms-snmp
+        container_name: wms-snmp
+        restart: unless-stopped
+        ports:
+            - "162:162/udp"
+        networks:
+            - wms-network
+        depends_on:
+            - app
 
 networks:
     wms-network:

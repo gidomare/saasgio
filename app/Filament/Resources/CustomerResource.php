@@ -72,19 +72,31 @@ class CustomerResource extends Resource
     {
         return $table
             ->columns([
+                // ID
                 Tables\Columns\TextColumn::make('wisphub_id')
                     ->label('ID')
-                    ->sortable(),
+                    ->sortable()
+                    ->alignCenter(),
+                
+                // Cliente + Teléfono (combined)
                 Tables\Columns\TextColumn::make('name')
                     ->label('Cliente')
+                    ->description(fn ($record) => $record->phone)
                     ->searchable()
                     ->sortable()
-                    ->description(fn ($record) => $record->phone)
-                    ->weight('bold'),
+                    ->weight('bold')
+                    ->wrap()
+                    ->lineClamp(1),
+                
+                // Plan + IP (combined)
                 Tables\Columns\TextColumn::make('services.plan.name')
-                    ->label('Plan / IP')
+                    ->label('Plan')
                     ->description(fn ($record) => $record->services->pluck('ip_address')->filter()->join(', '))
-                    ->extraAttributes(['class' => 'text-xs']),
+                    ->extraAttributes(['class' => 'text-xs'])
+                    ->wrap()
+                    ->lineClamp(1),
+                
+                // Estado
                 Tables\Columns\TextColumn::make('services.status')
                     ->label('Estado')
                     ->badge()
@@ -100,34 +112,24 @@ class CustomerResource extends Resource
                         'cancelled' => 'danger',
                         default => 'gray',
                     }),
+                
+                // Router + Fecha Instalación (combined)
                 Tables\Columns\TextColumn::make('services.router.name')
                     ->label('Router')
-                    ->listWithLineBreaks()
+                    ->description(fn ($record) => $record->installation_date ?? null)
                     ->sortable()
                     ->extraAttributes(['class' => 'text-xs'])
-                    ->toggleable(),
-                Tables\Columns\TextColumn::make('installation_date')
-                    ->label('Instalado')
-                    ->date('d/m/y')
-                    ->sortable(),
+                    ->wrap()
+                    ->lineClamp(1),
+                
+                // Dirección
                 Tables\Columns\TextColumn::make('address')
                     ->label('Dirección')
                     ->wrap()
                     ->lineClamp(2)
-                    ->extraAttributes(['class' => 'text-[11px] leading-tight'])
+                    ->extraAttributes(['class' => 'text-xs'])
                     ->searchable()
-                    ->sortable()
-                    ->toggleable(),
-                Tables\Columns\TextColumn::make('phone')
-                    ->label('Teléfono')
-                    ->searchable()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\TextColumn::make('created_at')
-                    ->label('Alta')
-                    ->date('d/m/y')
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->sortable(),
             ])
             ->striped()
             ->deferFilters()
@@ -157,26 +159,28 @@ class CustomerResource extends Resource
             ])
             ->actions([
                 Tables\Actions\Action::make('toggleStatus')
-                    ->label(fn ($record) => $record->services->where('status', 'active')->count() > 0 ? 'Suspender' : 'Activar')
+                    ->label('')
+                    ->tooltip(fn ($record) => $record->services->where('status', 'active')->count() > 0 ? 'Suspender' : 'Activar')
                     ->icon(fn ($record) => $record->services->where('status', 'active')->count() > 0 ? 'heroicon-o-pause-circle' : 'heroicon-o-play-circle')
                     ->color(fn ($record) => $record->services->where('status', 'active')->count() > 0 ? 'danger' : 'success')
                     ->requiresConfirmation()
-                    ->modalHeading(fn ($record) => ($record->services->where('status', 'active')->count() > 0 ? 'Suspender' : 'Activar') . ' servicios de ' . $record->name)
-                    ->modalDescription('¿Seguro que deseas cambiar el estado de conexión de este cliente?')
                     ->action(function ($record) {
-                        $newStatus = $record->services->where('status', 'active')->count() > 0 ? 'suspended' : 'active';
+                        $hasActiveServices = $record->services->where('status', 'active')->count() > 0;
+                        $newStatus = $hasActiveServices ? 'suspended' : 'active';
+                        
                         $record->services()->update(['status' => $newStatus]);
                         
-                        \Filament\Notifications\Notification::make()
-                            ->title('Estado actualizado')
-                            ->body("El cliente {$record->name} ahora está " . ($newStatus === 'active' ? 'ACTIVO' : 'SUSPENDIDO'))
+                        Notification::make()
+                            ->title($hasActiveServices ? 'Servicios suspendidos' : 'Servicios activados')
                             ->success()
                             ->send();
                     }),
-                Tables\Actions\ActionGroup::make([
-                    Tables\Actions\EditAction::make(),
-                    Tables\Actions\DeleteAction::make(),
-                ])->icon('heroicon-m-ellipsis-vertical'),
+                Tables\Actions\EditAction::make()
+                    ->label('')
+                    ->tooltip('Editar'),
+                Tables\Actions\DeleteAction::make()
+                    ->label('')
+                    ->tooltip('Eliminar'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

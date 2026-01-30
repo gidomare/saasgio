@@ -8,3 +8,6 @@ Route::get('/user', function (Request $request) {
 })->middleware('auth:sanctum');
 
 Route::post('/chatwoot/webhook', [\App\Http\Controllers\Bot\ChatwootWebhookController::class, 'handle']);
+
+// OLT SNMP Trap Webhook
+Route::post('/webhooks/olt-trap', [\App\Http\Controllers\Api\OltTrapController::class, 'receiveTrap']);

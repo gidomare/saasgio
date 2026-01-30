@@ -296,8 +296,9 @@ class RouterResource extends Resource
                     ]),
             ])
             ->actions([
-                Tables\Actions\Action::make('testConnection')
-                    ->label('Probar API')
+                Tables\Actions\Action::make('test_api')
+                    ->label('')
+                    ->tooltip('Probar API')
                     ->icon('heroicon-o-signal')
                     ->color('success')
                     ->action(function ($record) {
@@ -310,7 +311,9 @@ class RouterResource extends Resource
                         
                         $record->update(['is_online' => true, 'last_checked_at' => now()]);
                     }),
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()
+                    ->label('')
+                    ->tooltip('Editar'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

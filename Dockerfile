@@ -12,7 +12,11 @@ RUN apk add --no-cache \
     libzip-dev \
     icu-dev \
     oniguruma-dev \
-    linux-headers
+    linux-headers \
+    net-snmp \
+    net-snmp-dev \
+    net-snmp-libs \
+    mysql-client
 
 # Install PHP extensions
 RUN docker-php-ext-install \
@@ -24,7 +28,8 @@ RUN docker-php-ext-install \
     gd \
     intl \
     zip \
-    opcache
+    opcache \
+    snmp
 
 # Install Redis extension
 RUN apk add --no-cache pcre-dev $PHPIZE_DEPS \

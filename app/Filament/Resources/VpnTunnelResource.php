@@ -80,8 +80,9 @@ class VpnTunnelResource extends Resource
                     ->boolean(),
             ])
             ->actions([
-                Tables\Actions\Action::make('test')
-                    ->label('Probar Conexión')
+                Tables\Actions\Action::make('test_connection')
+                    ->label('')
+                    ->tooltip('Probar Conexión')
                     ->icon('heroicon-o-arrow-path')
                     ->action(function (VpnTunnel $record) {
                         \App\Jobs\TestVpnConnectionJob::dispatch($record);
@@ -91,14 +92,17 @@ class VpnTunnelResource extends Resource
                             ->success()
                             ->send();
                     }),
-                Tables\Actions\Action::make('logs')
-                    ->label('Logs')
+                Tables\Actions\Action::make('view_logs')
+                    ->label('')
+                    ->tooltip('Logs')
                     ->icon('heroicon-o-document-text')
                     ->modalHeading('Logs de Última Prueba')
                     ->modalContent(fn (VpnTunnel $record) => new \Illuminate\Support\HtmlString('<pre style="white-space: pre-wrap;">' . ($record->last_test_output ?? 'Sin logs') . '</pre>'))
                     ->modalSubmitAction(false)
                     ->modalCancelActionLabel('Cerrar'),
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\EditAction::make()
+                    ->label('')
+                    ->tooltip('Editar'),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
