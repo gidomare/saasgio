@@ -18,10 +18,30 @@ class CustomerResource extends Resource
     protected static ?string $model = Customer::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-users';
+    protected static ?string $navigationGroup = 'Clientes';
+    protected static ?int $navigationSort = 1;
     
     public static function getModelLabel(): string
     {
         return 'Cliente';
+    }
+    
+    public static function getGloballySearchableAttributes(): array
+    {
+        return ['name', 'email', 'phone', 'address'];
+    }
+    
+    public static function getGlobalSearchResultTitle($record): string
+    {
+        return $record->name;
+    }
+    
+    public static function getGlobalSearchResultDetails($record): array
+    {
+        return [
+            'Email' => $record->email,
+            'Teléfono' => $record->phone,
+        ];
     }
 
     public static function getPluralModelLabel(): string
@@ -71,6 +91,9 @@ class CustomerResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 // ID
                 Tables\Columns\TextColumn::make('wisphub_id')
@@ -177,7 +200,8 @@ class CustomerResource extends Resource
                     }),
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
                 Tables\Actions\DeleteAction::make()
                     ->label('')
                     ->tooltip('Eliminar'),

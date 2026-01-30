@@ -17,7 +17,9 @@ class ServiceResource extends Resource
 {
     protected static ?string $model = Service::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-wifi';
+    protected static ?string $navigationIcon = 'heroicon-o-signal';
+    protected static ?string $navigationGroup = 'Clientes';
+    protected static ?int $navigationSort = 2;
     
     public static function getModelLabel(): string
     {
@@ -110,6 +112,9 @@ class ServiceResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 Tables\Columns\TextColumn::make('customer.name')
                     ->label('Cliente')
@@ -153,7 +158,8 @@ class ServiceResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

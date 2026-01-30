@@ -17,7 +17,9 @@ class RouterResource extends Resource
 {
     protected static ?string $model = Router::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-server';
+    protected static ?string $navigationIcon = 'heroicon-o-globe-alt';
+    protected static ?string $navigationGroup = 'Red';
+    protected static ?int $navigationSort = 3;
 
     public static function getModelLabel(): string
     {
@@ -192,6 +194,11 @@ class RouterResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('60s')
+            ->deferLoading()
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Nombre')
@@ -313,7 +320,8 @@ class RouterResource extends Resource
                     }),
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

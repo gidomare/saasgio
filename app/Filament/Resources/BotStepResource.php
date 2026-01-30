@@ -18,6 +18,8 @@ class BotStepResource extends Resource
     protected static ?string $model = BotStep::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-queue-list';
+    protected static ?string $navigationGroup = 'Automatización';
+    protected static ?int $navigationSort = 3;
 
     public static function form(Form $form): Form
     {

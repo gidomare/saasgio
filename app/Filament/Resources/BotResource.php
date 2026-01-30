@@ -18,6 +18,8 @@ class BotResource extends Resource
     protected static ?string $model = Bot::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationGroup = 'Automatización';
+    protected static ?int $navigationSort = 1;
 
     public static function form(Form $form): Form
     {
@@ -196,6 +198,9 @@ class BotResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->searchable(),

@@ -16,15 +16,15 @@ class OnuResource extends Resource
 {
     protected static ?string $model = Onu::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-wifi';
+    protected static ?string $navigationIcon = 'heroicon-o-cpu-chip';
+    protected static ?string $navigationGroup = 'Red';
+    protected static ?int $navigationSort = 2;
     
     protected static ?string $navigationLabel = 'ONUs';
     
     protected static ?string $modelLabel = 'ONU';
     
     protected static ?string $pluralModelLabel = 'ONUs';
-    
-    protected static ?string $navigationGroup = 'OLT Management';
 
     public static function form(Form $form): Form
     {
@@ -191,6 +191,11 @@ class OnuResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('30s')
+            ->deferLoading()
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 // OLT + Port (combined)
                 Tables\Columns\TextColumn::make('olt.name')
@@ -288,7 +293,8 @@ class OnuResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
                 Tables\Actions\DeleteAction::make()
                     ->label('')
                     ->tooltip('Eliminar'),

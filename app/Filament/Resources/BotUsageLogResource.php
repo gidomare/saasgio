@@ -18,6 +18,8 @@ class BotUsageLogResource extends Resource
     protected static ?string $model = BotUsageLog::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-chat-bubble-left-right';
+    protected static ?string $navigationGroup = 'Automatización';
+    protected static ?int $navigationSort = 4;
 
     public static function form(Form $form): Form
     {

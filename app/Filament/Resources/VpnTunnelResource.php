@@ -17,7 +17,9 @@ class VpnTunnelResource extends Resource
 {
     protected static ?string $model = VpnTunnel::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+    protected static ?string $navigationIcon = 'heroicon-o-shield-check';
+    protected static ?string $navigationGroup = 'Red';
+    protected static ?int $navigationSort = 4;
 
     public static function form(Form $form): Form
     {
@@ -49,6 +51,9 @@ class VpnTunnelResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Interfaz')
@@ -102,7 +107,8 @@ class VpnTunnelResource extends Resource
                     ->modalCancelActionLabel('Cerrar'),
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

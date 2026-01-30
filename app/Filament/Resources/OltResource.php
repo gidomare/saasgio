@@ -17,7 +17,9 @@ class OltResource extends Resource
 {
     protected static ?string $model = Olt::class;
 
-    protected static ?string $navigationIcon = 'heroicon-o-signal';
+    protected static ?string $navigationIcon = 'heroicon-o-server-stack';
+    protected static ?string $navigationGroup = 'Red';
+    protected static ?int $navigationSort = 1;
     
     protected static ?string $navigationLabel = 'OLTs';
     
@@ -160,6 +162,11 @@ class OltResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->poll('30s')
+            ->deferLoading()
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 // Nombre + IP Admin (combined)
                 Tables\Columns\TextColumn::make('name')
@@ -288,7 +295,8 @@ class OltResource extends Resource
                 
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
                 Tables\Actions\DeleteAction::make()
                     ->label('')
                     ->tooltip('Eliminar'),

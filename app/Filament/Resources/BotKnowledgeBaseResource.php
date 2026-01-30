@@ -18,6 +18,8 @@ class BotKnowledgeBaseResource extends Resource
     protected static ?string $model = BotKnowledgeBase::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-academic-cap';
+    protected static ?string $navigationGroup = 'Automatización';
+    protected static ?int $navigationSort = 2;
 
     public static function form(Form $form): Form
     {

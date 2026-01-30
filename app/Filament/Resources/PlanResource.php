@@ -18,6 +18,8 @@ class PlanResource extends Resource
     protected static ?string $model = Plan::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-currency-dollar';
+    protected static ?string $navigationGroup = 'Clientes';
+    protected static ?int $navigationSort = 3;
 
     public static function getModelLabel(): string
     {
@@ -72,6 +74,9 @@ class PlanResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->persistFiltersInSession()
+            ->persistSearchInSession()
+            ->persistSortInSession()
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Nombre')
@@ -100,7 +105,8 @@ class PlanResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make()
                     ->label('')
-                    ->tooltip('Editar'),
+                    ->tooltip('Editar')
+                    ->slideOver(),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

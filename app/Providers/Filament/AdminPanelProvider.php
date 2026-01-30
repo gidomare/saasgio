@@ -55,6 +55,9 @@ class AdminPanelProvider extends PanelProvider
             ->sidebarWidth('240px')
             ->darkMode(true)
             ->maxContentWidth(MaxWidth::Full)
+            ->globalSearch(true)
+            ->globalSearchKeyBindings(['command+k', 'ctrl+k'])
+            ->globalSearchFieldKeyBindingSuffix()
             /* --- RE-DISEÑO RADICAL DE CABECERA Y TOGGLE --- */
             ->renderHook(
                 'panels::user-menu.before',
